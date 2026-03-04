@@ -1,0 +1,615 @@
+═══════════════════════════════════════════════════════════════════
+        ____          _  __ _   ____            _
+       / ___|_      _(_)/ _| |_|  _ \ _ __ ___ | |__   ___
+       \___ \ \ /\ / / | |_| __| |_) | '__/ _ \| '_ \ / _ \
+        ___) \ V  V /| |  _| |_|  __/| | | (_) | |_) |  __/
+       |____/ \_/\_/ |_|_|  \__|_|   |_|  \___/|_.__/ \___|
+
+              High-Speed Directory Fuzzer — v1.0.0
+              Built with Go | MIT License
+═══════════════════════════════════════════════════════════════════
+
+
+───────────────────────────────────────────────────────────────────
+ TABLE OF CONTENTS
+───────────────────────────────────────────────────────────────────
+
+  1.  Overview
+  2.  Features
+  3.  Installation
+  4.  Project Structure
+  5.  Usage & Flags
+  6.  Examples
+  7.  Output & Color Guide
+  8.  Severity System
+  9.  Tag System
+  10. Wordlists
+  11. HTTP Client Internals
+  12. Concurrency Model
+  13. Package Reference
+  14. Extending SwiftProbe
+  15. Legal Disclaimer
+
+
+───────────────────────────────────────────────────────────────────
+ 1. OVERVIEW
+───────────────────────────────────────────────────────────────────
+
+  SwiftProbe is a high-speed HTTP directory and file fuzzer written
+  in Go. It takes a target URL and a wordlist, then rapidly checks
+  whether hidden paths, files, or endpoints exist on the target
+  web server by sending concurrent HTTP requests and analysing
+  each response.
+
+  It is designed for:
+
+    • Web application penetration testers
+    • Bug bounty hunters
+    • Security researchers
+    • Developers auditing their own infrastructure
+
+  SwiftProbe is inspired by tools like Gobuster, ffuf, and dirb,
+  but is built from scratch as a learning project to deeply
+  understand Go concurrency, HTTP internals, and file I/O.
+
+
+───────────────────────────────────────────────────────────────────
+ 2. FEATURES
+───────────────────────────────────────────────────────────────────
+
+  Core
+  ────
+  • Concurrent fuzzing via goroutine worker pool
+  • Configurable thread count (default: 50)
+  • Buffered wordlist streaming (handles multi-GB wordlists)
+  • Custom HTTP status code matching and exclusion
+  • Extension fuzzing (-x php,html,bak,json)
+  • Redirect capture without following (301/302 logged)
+  • Response size and latency tracking
+  • Custom HTTP headers and User-Agent spoofing
+  • Optional redirect following mode
+
+  Output
+  ────
+  • Color-coded terminal output by status code
+  • Severity classification (CRITICAL / HIGH / MEDIUM / LOW)
+  • Auto-tagging (admin-panel, backup-file, git-exposure, etc.)
+  • Live progress reporting (verbose mode)
+  • Scan summary with duration and total found count
+
+  Reliability
+  ────
+  • Per-request timeout enforcement
+  • Graceful timeout and connection error handling
+  • HTTP transport tuning for high concurrency
+  • Connection reuse via persistent keep-alive pool
+
+
+───────────────────────────────────────────────────────────────────
+ 3. INSTALLATION
+───────────────────────────────────────────────────────────────────
+
+  Prerequisites
+  ─────────────
+  • Go 1.21 or higher
+  • Git
+
+  Install from source
+  ───────────────────
+
+    $ git clone https://github.com/yourname/swiftprobe.git
+    $ cd swiftprobe
+    $ go mod tidy
+    $ go build -o swiftprobe ./cmd/swiftprobe
+
+  Verify installation
+  ───────────────────
+
+    $ ./swiftprobe --help
+
+  Install globally (optional)
+  ───────────────────────────
+
+    $ go install github.com/yourname/swiftprobe/cmd/swiftprobe@latest
+
+  Dependencies
+  ────────────
+
+    github.com/fatih/color    — terminal color output
+
+
+───────────────────────────────────────────────────────────────────
+ 4. PROJECT STRUCTURE
+───────────────────────────────────────────────────────────────────
+
+  swiftprobe/
+  ├── cmd/
+  │   └── swiftprobe/
+  │       └── main.go             Entry point, CLI flag parsing
+  │
+  ├── internal/
+  │   ├── fuzzer/
+  │   │   ├── fuzzer.go           Core engine, goroutine worker pool
+  │   │   └── result.go           Result struct, severity, tag system
+  │   │
+  │   ├── requester/
+  │   │   └── http.go             HTTP client, Probe(), BuildURL()
+  │   │
+  │   ├── wordlist/
+  │   │   └── reader.go           Buffered wordlist streaming
+  │   │
+  │   └── output/
+  │       └── printer.go          Thread-safe terminal output
+  │
+  ├── wordlists/
+  │   └── common.txt              Built-in starter wordlist (~200 paths)
+  │
+  ├── docs/
+  │   └── SwiftProbe.txt          This file
+  │
+  ├── go.mod
+  ├── go.sum
+  ├── Makefile
+  └── README.md
+
+
+───────────────────────────────────────────────────────────────────
+ 5. USAGE & FLAGS
+───────────────────────────────────────────────────────────────────
+
+  Basic syntax
+  ────────────
+
+    $ swiftprobe -u <URL> -w <WORDLIST> [OPTIONS]
+
+
+  Required Flags
+  ──────────────
+
+    -u  string    Target URL
+                  Example: http://example.com
+
+    -w  string    Path to wordlist file
+                  Example: wordlists/common.txt
+
+
+  Optional Flags
+  ──────────────
+
+    -t  int       Number of concurrent threads
+                  Default: 50
+                  Recommended max: 200
+
+    -timeout int  HTTP request timeout in seconds
+                  Default: 5
+
+    -mc string    Comma-separated HTTP status codes to match
+                  Default: "200,201,301,302,403,401,500"
+
+    -fc string    Comma-separated HTTP status codes to exclude
+                  Default: "404"
+
+    -x  string    File extensions to append to each word
+                  Example: -x php,html,bak,json
+                  Each word is probed once bare + once per extension
+
+    -ua string    Custom User-Agent header string
+                  Default: "Mozilla/5.0 (compatible; SwiftProbe/1.0)"
+
+    -H  string    Custom header in "Key: Value" format
+                  Repeatable: -H "Auth: Bearer token" -H "X-Id: 1"
+
+    -follow       Follow HTTP redirects (default: capture and log)
+
+    -v            Verbose mode — show errors and live progress
+
+    -o  string    Output file path to save results
+                  Example: -o results.txt
+
+
+───────────────────────────────────────────────────────────────────
+ 6. EXAMPLES
+───────────────────────────────────────────────────────────────────
+
+  Basic scan with built-in wordlist
+  ──────────────────────────────────
+
+    $ ./swiftprobe -u http://testphp.vulnweb.com \
+                   -w wordlists/common.txt
+
+
+  Aggressive scan with 100 threads
+  ─────────────────────────────────
+
+    $ ./swiftprobe -u http://example.com \
+                   -w wordlists/common.txt \
+                   -t 100
+
+
+  Extension fuzzing (discover PHP and backup files)
+  ──────────────────────────────────────────────────
+
+    $ ./swiftprobe -u http://example.com \
+                   -w wordlists/common.txt \
+                   -x php,bak,old,json,html
+
+
+  Only show 200 OK responses
+  ───────────────────────────
+
+    $ ./swiftprobe -u http://example.com \
+                   -w wordlists/common.txt \
+                   -mc 200
+
+
+  Authenticated scan with Bearer token
+  ─────────────────────────────────────
+
+    $ ./swiftprobe -u http://api.example.com \
+                   -w wordlists/common.txt \
+                   -H "Authorization: Bearer eyJhbGciOiJIUzI1..." \
+                   -mc 200,201,403
+
+
+  Scan with custom User-Agent and output to file
+  ────────────────────────────────────────────────
+
+    $ ./swiftprobe -u http://example.com \
+                   -w /usr/share/seclists/Discovery/Web-Content/common.txt \
+                   -ua "Googlebot/2.1" \
+                   -o results.txt \
+                   -v
+
+
+  Large wordlist with verbose progress
+  ─────────────────────────────────────
+
+    $ ./swiftprobe -u http://example.com \
+                   -w /usr/share/seclists/Discovery/Web-Content/directory-list-2.3-medium.txt \
+                   -t 150 \
+                   -timeout 3 \
+                   -v
+
+
+───────────────────────────────────────────────────────────────────
+ 7. OUTPUT & COLOR GUIDE
+───────────────────────────────────────────────────────────────────
+
+  Sample output
+  ─────────────
+
+  ═══════════════════════════════════════════════════════
+    Target   : http://example.com
+    Wordlist : wordlists/common.txt
+    Threads  : 50
+    Timeout  : 5s
+    Codes    : 200,301,302,403,401,500
+    Started  : 2026-03-04 14:22:01
+  ═══════════════════════════════════════════════════════
+
+    [200]  /admin                    size: 4.2KB   [accessible, admin-panel]
+    [403]  /backup                   size: 0B      [forbidden, backup-file]
+    [301]  /api                      size: 0B      [redirect → /api/v1]
+    [401]  /api/v1/users             size: 1.1KB   [auth-required, api-endpoint]
+    [200]  /.git                     size: 231B    [accessible, git-exposure]
+    [500]  /config.php               size: 0B      [server-error, config-file]
+
+  ═══════════════════════════════════════════════════════
+    Finished : 2026-03-04 14:22:18
+    Duration : 17.3s
+    Total    : 214
+    Found    : 6
+  ═══════════════════════════════════════════════════════
+
+
+  Color reference
+  ───────────────
+
+    GREEN    [200] [201] [204]   Accessible — investigate immediately
+    YELLOW   [301] [302] [307]   Redirect   — note destination URL
+    MAGENTA  [401]               Auth gate  — try default credentials
+    RED      [403] [500]         Blocked / Server error
+    GRAY     [404] errors        Not found  — filtered out by default
+
+
+───────────────────────────────────────────────────────────────────
+ 8. SEVERITY SYSTEM
+───────────────────────────────────────────────────────────────────
+
+  Every result is automatically assigned a severity level based
+  on its HTTP status code. This helps you triage findings fast.
+
+    ┌──────────┬────────────────┬─────────────────────────────────┐
+    │ Severity │ Status Codes   │ Reason                          │
+    ├──────────┼────────────────┼─────────────────────────────────┤
+    │ CRITICAL │ 500, 503       │ May expose stack traces or      │
+    │          │                │ internal server details         │
+    ├──────────┼────────────────┼─────────────────────────────────┤
+    │ HIGH     │ 200, 201, 401  │ Path is accessible or auth-     │
+    │          │                │ gated — both are high value     │
+    ├──────────┼────────────────┼─────────────────────────────────┤
+    │ MEDIUM   │ 403            │ Path exists but is blocked —    │
+    │          │                │ confirm with bypass techniques  │
+    ├──────────┼────────────────┼─────────────────────────────────┤
+    │ LOW      │ 301, 302, 307  │ Redirects — follow manually     │
+    ├──────────┼────────────────┼─────────────────────────────────┤
+    │ NONE     │ 404, errors    │ Not found or unreachable        │
+    └──────────┴────────────────┴─────────────────────────────────┘
+
+
+───────────────────────────────────────────────────────────────────
+ 9. TAG SYSTEM
+───────────────────────────────────────────────────────────────────
+
+  SwiftProbe auto-tags every result based on its path and response.
+  Tags appear in square brackets next to each finding.
+
+  Status-based tags
+  ─────────────────
+    accessible       HTTP 200 — path is reachable
+    auth-required    HTTP 401 — valid path, login needed
+    forbidden        HTTP 403 — path exists, access denied
+    redirect         HTTP 3xx — redirects to another location
+    server-error     HTTP 5xx — internal server error
+
+  Size-based tags
+  ───────────────
+    large-response   Response body exceeds 1MB
+    empty-response   Response body is 0 bytes
+
+  Content-type tags
+  ─────────────────
+    json             application/json response
+    xml              application/xml response
+    html             text/html response
+    plaintext        text/plain response
+
+  Path-heuristic tags (high value)
+  ─────────────────────────────────
+    admin-panel      Path contains "admin"
+    backup-file      Path contains "backup" or ".bak"
+    api-endpoint     Path contains "api"
+    login-page       Path contains "login" or "signin"
+    config-file      Path contains "config" or ".env"
+    git-exposure     Path contains ".git" — critical finding
+
+  Performance tags
+  ────────────────
+    slow             Response took longer than 3 seconds
+
+
+───────────────────────────────────────────────────────────────────
+ 10. WORDLISTS
+───────────────────────────────────────────────────────────────────
+
+  Built-in wordlist
+  ─────────────────
+    wordlists/common.txt    ~200 curated high-value paths covering:
+                            Admin panels, API endpoints, auth pages,
+                            backup files, config files, git exposure,
+                            CMS paths (WordPress, Joomla, Drupal),
+                            framework paths (Laravel, Spring, Django)
+
+  Wordlist format rules
+  ──────────────────────
+    • One path per line
+    • Lines starting with # are treated as comments (skipped)
+    • Blank lines are skipped automatically
+    • Do NOT include leading slashes — SwiftProbe adds them
+    • Do NOT include the base URL
+
+  Recommended community wordlists
+  ────────────────────────────────
+
+    Install SecLists:
+      $ sudo apt install seclists        (Kali / Ubuntu)
+      $ brew install seclists            (macOS)
+
+    Useful lists after install:
+      /usr/share/seclists/Discovery/Web-Content/common.txt
+      /usr/share/seclists/Discovery/Web-Content/directory-list-2.3-medium.txt
+      /usr/share/seclists/Discovery/Web-Content/api/objects.txt
+      /usr/share/seclists/Discovery/Web-Content/raft-large-files.txt
+
+  Memory efficiency
+  ─────────────────
+    SwiftProbe streams wordlists line-by-line using bufio.Scanner
+    through a buffered channel. It never loads the entire wordlist
+    into memory, so even a 500MB wordlist with millions of entries
+    runs with a constant ~5MB memory footprint.
+
+
+───────────────────────────────────────────────────────────────────
+ 11. HTTP CLIENT INTERNALS
+───────────────────────────────────────────────────────────────────
+
+  Transport tuning
+  ────────────────
+    SwiftProbe configures a custom http.Transport to handle high
+    concurrency efficiently:
+
+      MaxIdleConns        : 100   — total idle connection pool size
+      MaxIdleConnsPerHost : 100   — connections reused per host
+      IdleConnTimeout     : 30s   — how long idle connections live
+      DisableKeepAlives   : false — keep-alive ON for connection reuse
+
+    Without this tuning, Go's default transport allows only 2
+    connections per host, causing goroutines to queue and defeating
+    the purpose of running 50-100 threads.
+
+  Redirect policy
+  ───────────────
+    By default, SwiftProbe does NOT follow redirects. Instead it
+    captures and logs them as findings (301/302 are often meaningful
+    in recon). Use -follow to enable standard redirect following.
+
+  User-Agent
+  ──────────
+    Default: "Mozilla/5.0 (compatible; SwiftProbe/1.0)"
+    Override with -ua flag. Some servers return different responses
+    or block Go's default "Go-http-client/1.1" agent entirely.
+
+
+───────────────────────────────────────────────────────────────────
+ 12. CONCURRENCY MODEL
+───────────────────────────────────────────────────────────────────
+
+  SwiftProbe uses a classic Go concurrency pattern:
+
+    Wordlist Reader ──► channel<string> ──► N Goroutines ──► Printer
+     (1 goroutine)       (buffered 100)    (semaphore)     (mutex locked)
+
+  Step-by-step
+  ────────────
+
+    1. wordlist.Stream() opens the file and pushes words into a
+       buffered channel (cap 100) from a single goroutine.
+
+    2. The main fuzzer loop reads from the channel and spawns a
+       goroutine per word.
+
+    3. A semaphore channel (make(chan struct{}, threads)) limits
+       how many goroutines run simultaneously.
+
+    4. Each goroutine calls requester.Probe(), gets a Result,
+       checks it against the ResultFilter, and if it matches,
+       calls printer.PrintResult() which is mutex-locked.
+
+    5. sync.WaitGroup ensures the main thread waits for all
+       goroutines to finish before printing the summary.
+
+  Why a semaphore instead of a fixed worker pool?
+  ────────────────────────────────────────────────
+    A semaphore is simpler to reason about and produces identical
+    throughput for this use case. A fixed worker pool would use
+    slightly less memory at very high thread counts (500+) but
+    adds complexity without meaningful benefit at typical settings.
+
+
+───────────────────────────────────────────────────────────────────
+ 13. PACKAGE REFERENCE
+───────────────────────────────────────────────────────────────────
+
+  cmd/swiftprobe/main.go
+  ──────────────────────
+    main()              Parses CLI flags, builds Config, calls Run()
+
+  internal/fuzzer/fuzzer.go
+  ─────────────────────────
+    Config              Struct holding all scan parameters
+    Run(cfg Config)     Entry point — orchestrates the full scan
+
+  internal/fuzzer/result.go
+  ──────────────────────────
+    Result              Full data for one HTTP probe response
+    Severity            Enum: None / Low / Medium / High / Critical
+    NewResult()         Constructs Result from http.Response
+    NewErrorResult()    Constructs Result for failed requests
+    ResultFilter        Matches results against user criteria
+    NewResultFilter()   Builds filter from CLI flag strings
+    Matches(r Result)   Returns true if result passes filter
+
+  internal/requester/http.go
+  ───────────────────────────
+    Client              Wraps http.Client with fuzzer config
+    Config              HTTP client options struct
+    Result              Raw HTTP response data
+    New(cfg Config)     Creates a configured Client
+    Probe(url string)   Fires GET request, returns Result
+    BuildURL()          Safely joins base URL and path
+    BuildURLWithExtensions()  Returns URL variants per extension
+    IsTimeout(err)      True if error is a timeout
+    IsConnectionRefused(err)  True if connection was refused
+
+  internal/wordlist/reader.go
+  ────────────────────────────
+    Stream(path string) Opens wordlist, returns <-chan string
+
+  internal/output/printer.go
+  ───────────────────────────
+    Printer             Thread-safe output handler
+    Result              Display-ready result struct
+    New(verbose bool)   Creates a Printer
+    Banner()            Prints ASCII banner
+    PrintConfig()       Prints scan configuration table
+    PrintResult(r)      Prints a color-coded found result
+    PrintError()        Prints error line (verbose only)
+    PrintProgress()     Prints live progress (verbose only)
+    PrintSummary()      Prints final scan statistics
+
+
+───────────────────────────────────────────────────────────────────
+ 14. EXTENDING SWIFTPROBE
+───────────────────────────────────────────────────────────────────
+
+  Planned / suggested features to build next:
+
+  Recursive mode
+  ──────────────
+    When a directory is found (200/301), automatically re-run the
+    fuzzer against that subdirectory. Track visited paths to avoid
+    infinite loops.
+
+  Output to file
+  ──────────────
+    Add -o flag support in printer.go using io.MultiWriter to write
+    to both stdout and a file simultaneously.
+
+  Rate limiting
+  ─────────────
+    Add a time.Ticker-based rate limiter to cap requests/second.
+    Useful for stealthy scans or avoiding WAF triggers.
+
+  POST fuzzing
+  ────────────
+    Add -method POST and -data flags to fuzz form parameters
+    and API request bodies in addition to paths.
+
+  Response body matching
+  ──────────────────────
+    Add -ms (match string) and -fs (filter string) flags to include
+    or exclude results based on response body content.
+
+  Progress bar
+  ────────────
+    Integrate github.com/schollz/progressbar for a live progress
+    bar instead of the current line-based progress output.
+
+  JSON output
+  ───────────
+    Add -json flag to emit newline-delimited JSON for piping into
+    jq or other tools for post-processing.
+
+
+───────────────────────────────────────────────────────────────────
+ 15. LEGAL DISCLAIMER
+───────────────────────────────────────────────────────────────────
+
+  SwiftProbe is intended for use in authorized security testing,
+  penetration testing engagements, bug bounty programs, CTF
+  challenges, and auditing of systems you own or have explicit
+  written permission to test.
+
+  Scanning systems without authorization is illegal in most
+  jurisdictions and may violate the Computer Fraud and Abuse Act
+  (CFAA), the Computer Misuse Act (CMA), and equivalent laws in
+  your country.
+
+  The authors and contributors of SwiftProbe accept no liability
+  for any misuse, damage, or legal consequences arising from the
+  use of this tool.
+
+  Always get written permission before scanning any system
+  you do not personally own.
+
+  Safe targets for practice (no permission needed):
+    • http://testphp.vulnweb.com        (Acunetix test site)
+    • http://demo.testfire.net          (IBM test site)
+    • https://juice-shop.herokuapp.com  (OWASP Juice Shop)
+    • Your own local Docker containers
+
+═══════════════════════════════════════════════════════════════════
+  SwiftProbe v1.0.0 — Built with Go
+  github.com/yourname/swiftprobe
+  MIT License — Use responsibly
+═══════════════════════════════════════════════════════════════════
