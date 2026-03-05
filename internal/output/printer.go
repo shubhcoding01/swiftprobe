@@ -50,7 +50,7 @@ func Banner() {
  ___) \ V  V /| |  _| |_|  __/| | | (_) | |_) |  __/
 |____/ \_/\_/ |_|_|  \__|_|   |_|  \___/|_.__/ \___|
 `))
-	fmt.Println(gray("  High-Speed Directory Fuzzer | github.com/yourname/swiftprobe"))
+	fmt.Println(gray("  High-Speed Directory Fuzzer | github.com/shubhcoding01/swiftprobe"))
 	fmt.Println()
 }
 

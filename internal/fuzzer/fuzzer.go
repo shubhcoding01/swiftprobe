@@ -7,8 +7,8 @@
 //     "sync"
 
 //     "github.com/fatih/color"
-//     "github.com/yourname/swiftprobe/internal/requester"
-//     "github.com/yourname/swiftprobe/internal/wordlist"
+//     "github.com/shubhcoding01/swiftprobe/internal/requester"
+//     "github.com/shubhcoding01/swiftprobe/internal/wordlist"
 // )
 
 // type Config struct {
@@ -98,9 +98,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/yourname/swiftprobe/internal/output"
-	"github.com/yourname/swiftprobe/internal/requester"
-	"github.com/yourname/swiftprobe/internal/wordlist"
+	"github.com/shubhcoding01/swiftprobe/internal/output"
+	"github.com/shubhcoding01/swiftprobe/internal/requester"
+	"github.com/shubhcoding01/swiftprobe/internal/wordlist"
 )
 
 // Config holds all scan parameters passed in from main.go
