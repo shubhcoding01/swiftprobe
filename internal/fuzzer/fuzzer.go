@@ -88,7 +88,6 @@
 //     return set
 // }
 
-
 package fuzzer
 
 import (
@@ -111,7 +110,7 @@ type Config struct {
 	TimeoutSecs     int
 	MatchCodes      string
 	ExcludeCodes    string
-	Extensions      []string // e.g. ["php", "bak", "json"]
+	Extensions      []string
 	UserAgent       string
 	Headers         map[string]string
 	FollowRedirects bool
@@ -121,7 +120,6 @@ type Config struct {
 
 // Run is the main entry point — orchestrates the full scan
 func Run(cfg Config) {
-	// ── Defaults ────────────────────────────────────────────────
 	if cfg.Threads <= 0 {
 		cfg.Threads = 50
 	}
@@ -132,7 +130,6 @@ func Run(cfg Config) {
 		cfg.MatchCodes = "200,201,301,302,401,403,500"
 	}
 
-	// ── Printer ─────────────────────────────────────────────────
 	printer := output.New(cfg.Verbose)
 	output.Banner()
 	output.PrintConfig(
@@ -143,10 +140,8 @@ func Run(cfg Config) {
 		cfg.TimeoutSecs,
 	)
 
-	// ── Result Filter ────────────────────────────────────────────
 	filter := NewResultFilter(cfg.MatchCodes, cfg.ExcludeCodes)
 
-	// ── HTTP Client ──────────────────────────────────────────────
 	client := requester.New(requester.Config{
 		TimeoutSecs:     cfg.TimeoutSecs,
 		UserAgent:       cfg.UserAgent,
@@ -154,35 +149,29 @@ func Run(cfg Config) {
 		FollowRedirects: cfg.FollowRedirects,
 	})
 
-	// ── Wordlist Stream ──────────────────────────────────────────
 	words, err := wordlist.Stream(cfg.WordlistPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[ERROR] Could not open wordlist: %v\n", err)
 		os.Exit(1)
 	}
 
-	// ── Concurrency primitives ───────────────────────────────────
-	sem := make(chan struct{}, cfg.Threads) // semaphore
+	sem := make(chan struct{}, cfg.Threads)
 	var wg sync.WaitGroup
-
-	// ── Atomic counters (safe across goroutines) ─────────────────
 	var totalScanned atomic.Int64
-	var totalFound   atomic.Int64
+	var totalFound atomic.Int64
 
 	start := time.Now()
 
-	// ── Main scan loop ───────────────────────────────────────────
 	for word := range words {
-		// Build all URLs for this word (bare + extensions)
 		urls := buildTargetURLs(cfg, word)
 
 		for _, u := range urls {
 			wg.Add(1)
-			sem <- struct{}{} // acquire slot
+			sem <- struct{}{}
 
 			go func(targetURL, path string) {
 				defer wg.Done()
-				defer func() { <-sem }() // release slot
+				defer func() { <-sem }()
 
 				resp, err := client.Probe(targetURL)
 				totalScanned.Add(1)
@@ -199,8 +188,18 @@ func Run(cfg Config) {
 					return
 				}
 
-				// Map requester.Result → fuzzer.Result for analysis
-				result := NewResult(targetURL, path, toHTTPResponse(resp), resp.Latency)
+				result := &Result{
+					URL:         targetURL,
+					Path:        path,
+					StatusCode:  resp.StatusCode,
+					Size:        resp.Size,
+					RedirectURL: resp.RedirectURL,
+					ContentType: resp.ContentType,
+					Latency:     resp.Latency,
+				}
+
+				result.Severity = result.classifySeverity()
+				result.Tags = result.generateTags()
 
 				if !filter.Matches(result) {
 					return
@@ -208,7 +207,6 @@ func Run(cfg Config) {
 
 				totalFound.Add(1)
 
-				// Map fuzzer.Result → output.Result for printing
 				printer.PrintResult(output.Result{
 					URL:        result.URL,
 					Path:       result.Path,
@@ -220,54 +218,19 @@ func Run(cfg Config) {
 			}(u, word)
 		}
 
-		// Live progress update (verbose mode only)
 		if cfg.Verbose {
 			printer.PrintProgress(int(totalScanned.Load()), 0)
 		}
 	}
 
 	wg.Wait()
-
 	printer.PrintSummary(time.Since(start))
 }
 
-// buildTargetURLs returns all URL variants for a given word.
-// If extensions are configured, each word gets probed bare + once per extension.
+// buildTargetURLs returns all URL variants for a given word
 func buildTargetURLs(cfg Config, word string) []string {
 	if len(cfg.Extensions) == 0 {
 		return []string{requester.BuildURL(cfg.TargetURL, word)}
 	}
 	return requester.BuildURLWithExtensions(cfg.TargetURL, word, cfg.Extensions)
 }
-
-// toHTTPResponse converts a requester.Result into a minimal http.Response
-// so that NewResult() (which expects *http.Response) can consume it.
-// This keeps the requester package decoupled from the fuzzer package.
-func toHTTPResponse(r *requester.Result) *httpResponseAdapter {
-	return &httpResponseAdapter{result: r}
-}
-
-// httpResponseAdapter is a thin shim so NewResult() can read
-// status code, size, and headers without importing net/http in this file.
-type httpResponseAdapter struct {
-	result *requester.Result
-}
-
-func (a *httpResponseAdapter) GetStatusCode() int    { return a.result.StatusCode }
-func (a *httpResponseAdapter) GetSize() int64        { return a.result.Size }
-func (a *httpResponseAdapter) GetLocation() string   { return a.result.RedirectURL }
-func (a *httpResponseAdapter) GetContentType() string { return a.result.ContentType }
-func (a *httpResponseAdapter) GetServer() string     { return a.result.Server }
-```
-
----
-
-## What changed and why
-
-**Wired in all your packages** — the old version had inline color logic and `fmt.Printf` everywhere. Now it delegates cleanly:
-```
-wordlist.Stream()     → feeds words
-requester.New()       → fires HTTP
-NewResultFilter()     → decides what matches
-output.Printer        → handles all printing
-NewResult()           → enriches with severity + tags
