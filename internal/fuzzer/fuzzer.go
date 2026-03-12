@@ -88,6 +88,153 @@
 //     return set
 // }
 
+// package fuzzer
+
+// import (
+// 	"fmt"
+// 	"os"
+// 	"sync"
+// 	"sync/atomic"
+// 	"time"
+
+// 	"github.com/shubhcoding01/swiftprobe/internal/output"
+// 	"github.com/shubhcoding01/swiftprobe/internal/requester"
+// 	"github.com/shubhcoding01/swiftprobe/internal/wordlist"
+// )
+
+// // Config holds all scan parameters passed in from main.go
+// type Config struct {
+// 	TargetURL       string
+// 	WordlistPath    string
+// 	Threads         int
+// 	TimeoutSecs     int
+// 	MatchCodes      string
+// 	ExcludeCodes    string
+// 	Extensions      []string
+// 	UserAgent       string
+// 	Headers         map[string]string
+// 	FollowRedirects bool
+// 	Verbose         bool
+// 	OutputFile      string
+// }
+
+// // Run is the main entry point — orchestrates the full scan
+// func Run(cfg Config) {
+// 	if cfg.Threads <= 0 {
+// 		cfg.Threads = 50
+// 	}
+// 	if cfg.TimeoutSecs <= 0 {
+// 		cfg.TimeoutSecs = 5
+// 	}
+// 	if cfg.MatchCodes == "" {
+// 		cfg.MatchCodes = "200,201,301,302,401,403,500"
+// 	}
+
+// 	printer := output.New(cfg.Verbose)
+// 	output.Banner()
+// 	output.PrintConfig(
+// 		cfg.TargetURL,
+// 		cfg.WordlistPath,
+// 		cfg.MatchCodes,
+// 		cfg.Threads,
+// 		cfg.TimeoutSecs,
+// 	)
+
+// 	filter := NewResultFilter(cfg.MatchCodes, cfg.ExcludeCodes)
+
+// 	client := requester.New(requester.Config{
+// 		TimeoutSecs:     cfg.TimeoutSecs,
+// 		UserAgent:       cfg.UserAgent,
+// 		Headers:         cfg.Headers,
+// 		FollowRedirects: cfg.FollowRedirects,
+// 	})
+
+// 	words, err := wordlist.Stream(cfg.WordlistPath)
+// 	if err != nil {
+// 		fmt.Fprintf(os.Stderr, "[ERROR] Could not open wordlist: %v\n", err)
+// 		os.Exit(1)
+// 	}
+
+// 	sem := make(chan struct{}, cfg.Threads)
+// 	var wg sync.WaitGroup
+// 	var totalScanned atomic.Int64
+// 	var totalFound atomic.Int64
+
+// 	start := time.Now()
+
+// 	for word := range words {
+// 		urls := buildTargetURLs(cfg, word)
+
+// 		for _, u := range urls {
+// 			wg.Add(1)
+// 			sem <- struct{}{}
+
+// 			go func(targetURL, path string) {
+// 				defer wg.Done()
+// 				defer func() { <-sem }()
+
+// 				resp, err := client.Probe(targetURL)
+// 				totalScanned.Add(1)
+
+// 				if err != nil {
+// 					if requester.IsConnectionRefused(err) {
+// 						fmt.Fprintf(os.Stderr,
+// 							"\n[FATAL] Connection refused — is %s up?\n",
+// 							cfg.TargetURL,
+// 						)
+// 						os.Exit(1)
+// 					}
+// 					printer.PrintError(path, err)
+// 					return
+// 				}
+
+// 				result := &Result{
+// 					URL:         targetURL,
+// 					Path:        path,
+// 					StatusCode:  resp.StatusCode,
+// 					Size:        resp.Size,
+// 					RedirectURL: resp.RedirectURL,
+// 					ContentType: resp.ContentType,
+// 					Latency:     resp.Latency,
+// 				}
+
+// 				result.Severity = result.classifySeverity()
+// 				result.Tags = result.generateTags()
+
+// 				if !filter.Matches(result) {
+// 					return
+// 				}
+
+// 				totalFound.Add(1)
+
+// 				printer.PrintResult(output.Result{
+// 					URL:        result.URL,
+// 					Path:       result.Path,
+// 					StatusCode: result.StatusCode,
+// 					Size:       result.Size,
+// 					Redirected: result.RedirectURL,
+// 				})
+
+// 			}(u, word)
+// 		}
+
+// 		if cfg.Verbose {
+// 			printer.PrintProgress(int(totalScanned.Load()), 0)
+// 		}
+// 	}
+
+// 	wg.Wait()
+// 	printer.PrintSummary(time.Since(start))
+// }
+
+// // buildTargetURLs returns all URL variants for a given word
+// func buildTargetURLs(cfg Config, word string) []string {
+// 	if len(cfg.Extensions) == 0 {
+// 		return []string{requester.BuildURL(cfg.TargetURL, word)}
+// 	}
+// 	return requester.BuildURLWithExtensions(cfg.TargetURL, word, cfg.Extensions)
+// }
+
 package fuzzer
 
 import (
